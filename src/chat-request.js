@@ -64,6 +64,15 @@ const GUI_FINGERPRINT = new RegExp(
 const NEUTRAL_GUI = 'The runtime context describes the environment this agent runs in.'
 
 /**
+ * 第二处指纹：讲「@ 开头的路径」的那一段。
+ *
+ * 上游把这段的开头也收了进去，特征是「这一段的前一百多个字符逐字出现」，改一个词就过。
+ * 只换掉第一句的措辞，意思不变；后面几句单独放着不触发，不用动。
+ */
+const AT_PATHS_FINGERPRINT = /Tokens prefixed with @ are paths the user explicitly referenced\./g
+const NEUTRAL_AT_PATHS = 'Tokens that start with @ name paths the user explicitly referenced.'
+
+/**
  * 把请求体整成上游认的写法。
  *
  * @param {string} bodyText 宿主发来的原始请求体
@@ -125,7 +134,7 @@ function neutralizeIdentity(body) {
 
 /** 把整句指纹换成中性说法；命中与位置无关，所以逐处替换。 */
 function neutralizeFingerprints(body) {
-  forEachText(body, text => text.replace(GUI_FINGERPRINT, NEUTRAL_GUI))
+  forEachText(body, text => text.replace(GUI_FINGERPRINT, NEUTRAL_GUI).replace(AT_PATHS_FINGERPRINT, NEUTRAL_AT_PATHS))
 }
 
 /**
