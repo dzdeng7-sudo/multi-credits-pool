@@ -23,6 +23,7 @@ import { isPastUtc8Time } from './protocol.js'
 import { checkedInToday } from './store.js'
 import { appendUsage } from './usage.js'
 import { isReasoningEfforts } from './reasoning.js'
+import { recordRuntime } from './runtime-info.js'
 
 export const name = 'llm-multi-credits-pool'
 
@@ -51,6 +52,14 @@ function trace(stage) {
 }
 
 trace('module-loaded')
+
+/**
+ * 把宿主自带运行时（node + pnpm）的位置记进数据目录。
+ *
+ * 命令行的 `update` 要找 pnpm 装新版本，而宿主的 pnpm 只存在于安装目录里、不进 PATH。
+ * 宿主跑起来的时候顺手记一份，之后即使宿主已退出，`update` 也能拿它去装。
+ */
+if (recordRuntime() !== undefined) trace('runtime-recorded')
 
 /** 宿主的 pi-ai 入口固定用这个 settings 命名空间（dsh-base 的补丁里 id 就是它）。 */
 export const SETTINGS_NS = 'llm-pi-ai'

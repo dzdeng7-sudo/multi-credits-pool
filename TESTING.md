@@ -72,7 +72,7 @@ node --expose-internals tools\reasoning-live-probe.mjs  # 逐档实发，验推�
 - `tools/upstream-probe.mjs`：直接对上游发一条带 `tools` 的请求，确认回包是 OpenAI 形状的分片——`delta.reasoning_content`、`delta.tool_calls`、`finish_reason: "tool_calls"`、`usage`、`data: [DONE]` 全部出现，说明上游本身就兼容 OpenAI 协议，代理不需要做响应体转换。
 - `tools/proxy-live-test.mjs`：9 项全过。真账号经代理走 `POST /v1/chat/completions`（带 `tools`）返回 200、响应头带出账账号 id、工具调用与思考增量与结束标记原样透传；随后换假上游验证「第一个账号 402 → 自动换第二个账号 → 出账头是 a2、调用顺序 a1,a2、a1 进入冷却」。
 
-另有六组不碰网络的插件层用例：
+另有七组不碰网络的插件层用例：
 
 ```powershell
 $env:ELECTRON_RUN_AS_NODE = '1'
@@ -81,6 +81,8 @@ node --expose-internals tools\client-test.mjs
 node --expose-internals tools\effort-fallback-test.mjs
 node --expose-internals tools\chat-request-test.mjs
 node --expose-internals tools\model-catalog-test.mjs
+node --expose-internals tools\pnpm-resolve-test.mjs
+node --expose-internals tools\update-check-test.mjs
 ```
 
 - `tools/web-api-test.mjs`：37 项全过。用真 http 服务器挂上三个 handler 再发请求——状态文档（动作 key、配置、空账号库）、非回环 `Host` 返回 403、缺 key 返回 401、改配置落到 `plugin.json`、越界时刻不写入、非法 JSON 返回 400、未知动作与未知账号返回 400 且带原因；状态文档带显示名、`recent` 数组与当前 `strategy`；`strategy` 动作落盘、回执新模式、触发热切换回调，非法模式返回 400 且不触发回调；模型的 `catalog`/`visibleModels`/`lastRefresh` 进状态文档、`visible-models` 落盘存的是被勾掉的 id 并触发重登记、空勾选被拒且不触发回调、`refresh-models` 的回执与失败回执。
@@ -89,6 +91,10 @@ node --expose-internals tools\model-catalog-test.mjs
 - `tools/chat-request-test.mjs`：88 项全过。先用单元断言验 `prepareChatBody` 的六类改写（`developer` → `system` 且其它角色不动、系统/助手消息开头的 `You are an AI agent powered by DeepSeek Harness.` 换成中性自称而 user 消息与句中同句不动、内容块里的自称同样换掉——包括自称落在第二块、前面隔着空块或中性块、多块各自带自称、数组里的字符串块，系统提示中段那句带产品名的 GUI 说明按整句替换而句号变化/产品名不同时不动，讲 `@` 路径那一段的首句换掉而段内其余句子与前后文保留、大小写不同不命中、user 消息里不动，重复出现的全部替换、块内同样处理，`stream` 强制打开、`stream_options` 缺省补齐且已有不覆盖、`max_completion_tokens` 搬到 `max_tokens` 且不覆盖已有的、别名非正整数丢弃、`tool_choice` 的对象/字符串/`none` 三类形态），再验边界（BOM、非 JSON、数组、采样参数与工具定义原样保留、二次整形幂等），最后挂假上游确认链路里上游真收到 `system` 角色、系统提示已无自称与整句指纹、流式字段；另挂一个只会回 400/11128 的假上游，确认被拒时日志里写明消息形状（`system:[text,text] user:string`）且不含正文，回调拿到形状、整份请求体与上游文案。
 
 - `tools/model-catalog-test.mjs`：46 项全过。`parseModelCatalog` 按 `agents.cli.models` 的顺序输出、只登记 CLI 段、`maxInputTokens`/`maxOutputTokens` 映射成 `contextWindow`/`maxTokens`、缺名字退回 id、`disabled` 与缺上限的条目被跳过、六种拿不到清单时返回 `undefined`；`visibleModelsOf` 的空集合登记全部、勾掉的被过滤、全勾掉时退回完整清单；`writeModelCatalog` 写回清单并记录时间与区域、清掉已不存在的隐藏 id、保留密钥；旧 `plugin.json` 读进来能补出新字段；推理等级的上游三种形状（富声明 / 只有默认档 / 不是对象）、宿主认可的两种声明形状、`fillKnownEfforts` 的补位与不覆盖、登记出去的 profile 里每个模型都带等级、兜底清单与已知表对同一模型的档位一致。
+
+- `tools/pnpm-resolve-test.mjs`：32 项全过。验「装包用哪个命令」这条链路：`.cjs` 入口借同目录的 `node.exe` 跑、没有 node 时退回 `PATH` 上的 node、可执行文件直接跑、`--pnpm` 来源标记为 `flag`；候选顺序（环境变量 → `PATH` → 宿主记录的 `runtime.json` → 扫安装目录）与逐级回退，全都不可用时只回试过的清单；扫 `<根>\<应用>\resources\runtime\primary-runtime\dependencies\pnpm\bin\pnpm.cjs` 能找到自带 pnpm 并带上同目录 node，直接把应用目录当根也认得出；`recordRuntime` 写盘与 `readRuntime` 读回、没有 `resourcesPath` 时不写、读坏或没有文件返回 `undefined`；挑工具时 pnpm 优先、找不到退回 `npm install --prefix`、两个都没有时报错带试过的清单；参数拼装的 `--save-exact`/`--registry`，以及 `probeNpm` 对不存在的命令返回假。
+
+- `tools/update-check-test.mjs`：41 项全过。版本比较（补零、预发布后缀、非法输入）、注册表回执的四种回退、10 分钟缓存与 `force` 穿透、并发合并成一次请求、`/update-check` 路由的回环守卫与离线回执形状、`update` 子命令拼出的安装参数。
 
 另有三组覆盖轮换、策略与用量的用例：
 
@@ -158,3 +164,4 @@ node tools\ui-test.mjs
 | 改了代码刷新页面没效果 | 宿主把插件模块缓存在进程内（ESM 模块表），磁盘上已换新文件而 `/state` 仍按旧结构返回 | 改完插件要完全退出 DSH 再启动；`/state` 的返回里有没有新字段可作判据（例如时间轴改版后先看 `usage.timeline` 是否出现） |
 | 顶栏按钮加了样式类却不生效 | `Btn` 只把自己认识的属性写进 DOM，调用方传的 `className` 与 `data-*` 全被丢掉，`.credits-update` 这条规则因此永远匹配不上 | `Btn` 透传 `className` 与所有 `data-*`；`ui-test.mjs` 断言样式类真的出现在渲染结果里 |
 | 查更新时同一个按钮渲染两颗 | 提示条与顶栏各写了一遍「查到新版本」的分支，两处条件不完全一致 | 收成一颗按钮两种态（`检查更新` / `可升级 vX`），提示条只在 `updateStale` 时出现 |
+| `update` 报 `spawnSync pnpm ENOENT` | 桌面应用自带的 pnpm 在安装目录里、从不进 `PATH`，普通命令行里执行升级直接找不到命令，用户卡在一条报错上 | 新增 `runtime-info.js` 按四步找：`MULTI_CREDITS_PNPM` → `PATH` → 宿主启动时写下的 `runtime.json` → 扫 `%LOCALAPPDATA%\Programs`、两个 `Program Files` 与各盘根；`.cjs` 入口借同目录 `node.exe` 跑，四步都不通退回 `npm install --prefix`；`pnpm-resolve-test.mjs` 32 项钉住顺序与回退 |

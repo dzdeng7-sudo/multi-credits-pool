@@ -77,8 +77,8 @@ const HELP = `multi-credits-pool — 多账号 WorkBuddy 签到与积分汇总 v
   report [--out 文件.md] [--json]  完整汇总报告
 
 其它
-  update [--check] [--to 版本] [--registry URL] [--dry-run]
-        升级到 npm 上的新版本（先完全退出 DSH）
+  update [--check] [--to 版本] [--registry URL] [--pnpm 路径] [--dry-run]
+        升级到 npm 上的新版本（先完全退出 DSH）；找不到 pnpm 时自动用 npm
   where                        显示数据目录
   help                         本帮助
 

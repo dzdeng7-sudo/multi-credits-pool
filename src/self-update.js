@@ -12,10 +12,11 @@
  * （`<profile>/package.json` 的 dependencies + `node_modules`），因此升级后
  * 宿主的插件清单不用改，provider 登记也照旧。
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { profileDir } from '../src/paths.js'
+import { explicitPnpm, resolvePnpm } from './runtime-info.js'
 import { PACKAGE_NAME, REGISTRY_URL, fetchLatestVersion, localVersion, compareVersions } from '../src/update-check.js'
 
 /** 宿主在 profile 里声明的依赖键；先读 package.json，读不到就按包名。 */
@@ -48,11 +49,65 @@ export function installArgs(version, registryUrl) {
   return args
 }
 
+/**
+ * 退回 npm 时用的参数。
+ *
+ * profile 是 pnpm 装的，但 npm 对「hoisted 布局 + package.json dependencies」这套
+ * 同样能装出可用的 node_modules，所以 pnpm 实在找不到时先用 npm 顶上，
+ * 并在输出里说明——比让用户卡在一条报错上强。
+ */
+export function installArgsNpm(version, registryUrl) {
+  const args = ['install', `${PACKAGE_NAME}@${version}`, '--prefix', profileDir(), '--save-exact', '--no-fund', '--no-audit']
+  if (registryUrl !== undefined) args.push('--registry', registryUrl)
+  return args
+}
+
+/** 描述候选工具，报错时好让用户知道试过哪些。 */
+function describeTool(tool) {
+  return [tool.command, ...tool.args].join(' ')
+}
+
+function runTool(tool, args, cwd) {
+  execFileSync(tool.command, [...tool.args, ...args], { cwd, stdio: 'inherit', windowsHide: true })
+}
+
+/**
+ * 挑一个能用的包管理器：先 pnpm（PATH → 宿主自带 → 扫描安装目录），再 npm。
+ *
+ * 返回 `{ tool, args, fallback }`；都没有时返回 `{ tried }` 交给调用方报错。
+ */
+export function pickInstaller(version, registryUrl, options = {}) {
+  if (typeof options.pnpmPath === 'string' && options.pnpmPath !== '') {
+    const tool = explicitPnpm(options.pnpmPath, options.env ?? process.env)
+    return { tool, args: installArgs(version, registryUrl), fallback: false }
+  }
+  const resolved = resolvePnpm(options)
+  if (typeof resolved.command === 'string') {
+    return { tool: resolved, args: installArgs(version, registryUrl), fallback: false, tried: resolved.tried }
+  }
+  const npm = options.npmProbe ?? probeNpm
+  if (npm()) {
+    return { tool: { command: 'npm', args: [], from: 'npm' }, args: installArgsNpm(version, registryUrl), fallback: true, tried: resolved.tried }
+  }
+  return { tried: resolved.tried }
+}
+
+/** npm 探活：默认真跑一次 `npm --version`。 */
+export function probeNpm(options = {}) {
+  try {
+    const result = spawnSync(options.command ?? 'npm', ['--version'], { encoding: 'utf8', timeout: 20_000, windowsHide: true })
+    return result.status === 0
+  } catch {
+    return false
+  }
+}
+
 export async function cmdUpdate(flags) {
   const profileDirPath = profileDir()
   const current = localVersion()
   const wanted = typeof flags.to === 'string' ? flags.to : undefined
   const registryUrl = typeof flags.registry === 'string' ? flags.registry : undefined
+  const pnpmPath = typeof flags.pnpm === 'string' ? flags.pnpm : undefined
 
   if (flags.check === true) {
     const latest = await fetchLatestVersion({ registryUrl: registryUrl ?? REGISTRY_URL })
@@ -77,9 +132,19 @@ export async function cmdUpdate(flags) {
     return 0
   }
 
-  const args = installArgs(latest, registryUrl)
+  const picked = pickInstaller(latest, registryUrl, { pnpmPath })
+  if (picked.tool === undefined) {
+    const tried = picked.tried === undefined || picked.tried.length === 0 ? '' : `（试过：${picked.tried.join('；')}）`
+    console.log(`✘ 没找到可用的 pnpm 或 npm${tried}`)
+    console.log('  最省事的办法：装一个 pnpm —— npm i -g pnpm')
+    console.log('  或者用宿主自带的那个：multi-credits-pool update --pnpm "<DSH 安装目录>\\resources\\runtime\\primary-runtime\\dependencies\\pnpm\\bin\\pnpm.cjs"')
+    console.log('  也可以让宿主（桌面应用）的插件管理器把这个包重新装一次。')
+    return 1
+  }
+
+  const line = `${describeTool(picked.tool)} ${picked.args.join(' ')}`
   if (flags['dry-run'] === true) {
-    console.log(`将执行：pnpm ${args.join(' ')}`)
+    console.log(`将执行：${line}`)
     console.log(`  目标 profile：${profileDirPath}`)
     console.log(`  当前版本 ${current ?? '未知'} → ${latest}`)
     console.log('  提醒：宿主必须先完全退出，否则插件文件被占用，装完会留下半新半旧的副本。')
@@ -88,12 +153,14 @@ export async function cmdUpdate(flags) {
 
   console.log(`升级 ${PACKAGE_NAME}：${current ?? '未知'} → ${latest}`)
   console.log(`  profile：${profileDirPath}`)
+  console.log(`  包管理器：${picked.tool.from === 'npm' ? 'npm（没找到 pnpm，退回 npm）' : describeTool(picked.tool)}`)
   console.log('  提醒：如果 DSH 还开着，请先完全退出，装完再启动。')
   try {
-    execFileSync('pnpm', args, { cwd: profileDirPath, stdio: 'inherit' })
+    runTool(picked.tool, picked.args, profileDirPath)
   } catch (error) {
     console.log(`✘ 安装失败：${error instanceof Error ? error.message : String(error)}`)
-    console.log('  可以改用宿主自带的 pnpm，或让宿主的插件管理器重新安装一次。')
+    if (picked.fallback === true) console.log('  可以用 --pnpm <路径> 指定一个 pnpm 再试一次。')
+    else console.log('  可以改用宿主自带的 pnpm，或让宿主的插件管理器重新安装一次。')
     return 1
   }
   const installed = localVersion()
